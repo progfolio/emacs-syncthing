@@ -47,12 +47,6 @@
   :group 'syncthing)
 
 ;; customization values
-(defcustom syncthing-buffer
-  "*syncthing(ADDR)*"
-  "Syncthing's buffer name with special =ADDR= placeholder."
-  :group 'syncthing-startup
-  :type 'string)
-
 (defcustom syncthing-base-url
   "https://127.0.0.1:8384"
   "Base URL for Syncthing REST API endpoint."
@@ -756,28 +750,17 @@ Optional argument SKIP-CANCEL Skip removing auto-refresh."
                    (switch-to-buffer (get-buffer-create buf-obj))
                    (syncthing--update)))))))))
 
-(defun syncthing--switch-to-new-buffer (base-url)
-  "Create buffer name from BASE-URL."
-  (switch-to-buffer
-   (get-buffer-create
-    (generate-new-buffer
-     (replace-regexp-in-string
-      "ADDR" base-url
-      syncthing-buffer
-      t)))))
-
-(defun syncthing-with-base (base-url)
-  "Launch Syncthing client's instance for BASE-URL in a new buffer."
-  (interactive "sSyncthing REST API base URL: ")
-  (syncthing--switch-to-new-buffer base-url)
-  (syncthing-mode))
-
-(defun syncthing ()
-  "Launch Syncthing client's instance in a new buffer."
-  (interactive)
-  ;; switch first, assign later, buffer-local variable gets cleared otherwise
-  (syncthing--switch-to-new-buffer syncthing-base-url)
-  (syncthing-mode))
+(defun syncthing (&optional url)
+  "Launch Syncthing client for server at URL.
+URL defaults to `syncthing-base-url'."
+  (interactive (list (if (or current-prefix-arg (not syncthing-base-url))
+                         (read-string "Syncthing Server URL: ")
+                       syncthing-base-url)))
+  (unless syncthing-base-url (user-error "Cannot connect without server URL"))
+  (with-current-buffer (get-buffer-create (format "*syncthing(%s)*" syncthing-base-url))
+    (unless (derived-mode-p 'syncthing-mode) (syncthing-mode))
+    (pop-to-buffer (current-buffer)
+                   '((display-buffer-reuse-window display-buffer-same-window)))))
 
 (provide 'syncthing)
 ;;; syncthing.el ends here
