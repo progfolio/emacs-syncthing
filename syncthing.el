@@ -23,744 +23,164 @@
 
 ;;; Commentary:
 
-;; This package attempts to port the browser client functionality into Emacs.
+;;
 
 ;;; Code:
 
 (require 'widget)
 (require 'wid-edit)
+(require 'cl-macs)
+(require 'cl-lib)
+(require 'url)
 
-(defgroup syncthing
-  nil
+(defvar syncthing--servers nil)
+(defvar-local syncthing-server nil)
+
+(defgroup syncthing nil
   "Customization group for `syncthing'."
   :group 'external
   :group 'communication)
 
-(defgroup syncthing-startup
-  nil
-  "Customization sub-group for `syncthing' start-up stage."
-  :group 'syncthing)
-
-(defgroup syncthing-faces
-  nil
-  "Customization group for `syncthing' faces."
-  :group 'syncthing)
-
-;; customization values
-(defcustom syncthing-base-url
-  "https://127.0.0.1:8384"
-  "Base URL for Syncthing REST API endpoint."
-  :group 'syncthing
-  :type 'string)
-
-(defcustom syncthing-format-perc
-  "%6.2f%%"
-  "Format for displaying process percentage."
-  :group 'syncthing
-  :type 'string)
-
-(defcustom syncthing-cleanup-priority
-  0
-  "`add-hook' priority."
-  :group 'syncthing
+(defcustom syncthing-auto-revert-interval 10
+  "Number of seconds to wait before reverting client buffer."
   :type 'number)
 
-(defcustom syncthing-token
-  nil
-  "Syncthing REST API token."
-  :group 'syncthing
-  :type 'string)
+(cl-defstruct (syncthing-server (:copier nil) (:named nil)
+                                (:constructor syncthing--server))
+  "Syncthing server struct."
+  name url token data)
 
-(defcustom syncthing-start-collapsed
-  t
-  "Start all items collapsed."
-  :group 'syncthing-startup
-  :type 'boolean)
-
-(defcustom syncthing-start-with-auto-refresh
-  t
-  "Start with auto-refresh enabled."
-  :group 'syncthing-startup
-  :type 'boolean)
-
-(defcustom syncthing-auto-refresh-interval-sec
-  10
-  "Refresh interval in seconds."
-  :group 'syncthing
-  :type 'number)
-
-;; customization faces/colors/fonts
-(defface syncthing-title
-  '((((class color) (background dark))
-     (:inherit 'info-title-1))
-    (((class color) (background light))
-     (:inherit 'info-title-1))
-    (t :inherit 'info-title-1))
-  "Face for section titles."
-  :group 'syncthing-faces)
-
-(defface syncthing-prop
-  '((((class color) (background dark))
-     (:foreground "white" :height 0.75))
-    (((class color) (background light))
-     (:foreground "black" :height 0.75))
-    (t (:height 0.75)))
-  "Face for item properties."
-  :group 'syncthing-faces)
-
-(defface syncthing-bold
-  '((((class color) (background dark))
-     (:foreground "white" :bold t))
-    (((class color) (background light))
-     (:foreground "black" :bold t))
-    (t (:bold t)))
-  "Face for bold."
-  :group 'syncthing-faces)
-
-(defface syncthing-italic
-  '((((class color) (background dark))
-     (:foreground "white" :italic t))
-    (((class color) (background light))
-     (:foreground "black" :italic t))
-    (t (:italic t)))
-  "Face for italic."
-  :group 'syncthing-faces)
-
-(defface syncthing-progress-100
-  '((((class color) (background dark))
-     (:foreground "green"))
-    (((class color) (background light))
-     (:foreground "green"))
-    (t (:foreground "green")))
-  "Face for 100% progress."
-  :group 'syncthing-faces)
-
-(defface syncthing-progress-75
-  '((((class color) (background dark))
-     (:foreground "lightgreen"))
-    (((class color) (background light))
-     (:foreground "lightgreen"))
-    (t (:foreground "lightgreen")))
-  "Face for 75%-100% progress."
-  :group 'syncthing-faces)
-
-(defface syncthing-progress-50
-  '((((class color) (background dark))
-     (:foreground "yellow"))
-    (((class color) (background light))
-     (:foreground "yellow"))
-    (t (:foreground "yellow")))
-  "Face for 50%-75% progress."
-  :group 'syncthing-faces)
-
-(defface syncthing-progress-25
-  '((((class color) (background dark))
-     (:foreground "orange"))
-    (((class color) (background light))
-     (:foreground "orange"))
-    (t (:foreground "orange")))
-  "Face for 25%-50% progress."
-  :group 'syncthing-faces)
-
-(defface syncthing-progress-0
-  '((((class color) (background dark))
-     (:foreground "red"))
-    (((class color) (background light))
-     (:foreground "red"))
-    (t (:foreground "red")))
-  "Face for 0%-25% progress."
-  :group 'syncthing-faces)
-
-(defface syncthing-rate-download
-  '((((class color) (background dark))
-     (:foreground "deep sky blue"))
-    (((class color) (background light))
-     (:foreground "deep sky blue"))
-    (t (:foreground "deep sky blue")))
-  "Face for current download rate."
-  :group 'syncthing-faces)
-
-(defface syncthing-rate-upload
-  '((((class color) (background dark))
-     (:foreground "lightgreen"))
-    (((class color) (background light))
-     (:foreground "lightgreen"))
-    (t (:foreground "lightgreen")))
-  "Face for current upload rate."
-  :group 'syncthing-faces)
-
-(defface syncthing-count-local-files
-  '((((class color) (background dark))
-     (:foreground "white"))
-    (((class color) (background light))
-     (:foreground "white"))
-    (t (:foreground "white")))
-  "Face for local files counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-count-local-folders
-  '((((class color) (background dark))
-     (:foreground "yellow"))
-    (((class color) (background light))
-     (:foreground "yellow"))
-    (t (:foreground "yellow")))
-  "Face for local folder counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-count-local-bytes
-  '((((class color) (background dark))
-     (:foreground "light sea green"))
-    (((class color) (background light))
-     (:foreground "light sea green"))
-    (t (:foreground "light sea green")))
-  "Face for local bytes counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-count-listeners
-  '((((class color) (background dark))
-     (:foreground "green"))
-    (((class color) (background light))
-     (:foreground "green"))
-    (t (:foreground "green")))
-  "Face for listeners' counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-count-discovery
-  '((((class color) (background dark))
-     (:foreground "steel blue"))
-    (((class color) (background light))
-     (:foreground "steel blue"))
-    (t (:foreground "steel blue")))
-  "Face for discovery counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-uptime
-  '((((class color) (background dark))
-     (:foreground "orchid"))
-    (((class color) (background light))
-     (:foreground "orchid"))
-    (t (:foreground "orchid")))
-  "Face for uptime counter."
-  :group 'syncthing-faces)
-
-(defface syncthing-my-id
-  '((((class color) (background dark))
-     (:foreground "#3498db"))
-    (((class color) (background light))
-     (:foreground "#3498db"))
-    (t (:foreground "#3498db")))
-  "Face for this device's ID."
-  :group 'syncthing-faces)
-
-;; local/state variables
-(defvar-local syncthing-session-base-url
-  ""
-  "Tmp to hold session's base URL.")
-
-(defvar-local syncthing--state-session-buffer
-  ""
-  "Tmp to hold session's buffer instance/object.")
-
-(defvar-local syncthing--state-fold-folders
-  nil
-  "Tmp list to hold IDs of folds.")
-
-(defvar-local syncthing--state-fold-devices
-  nil
-  "Tmp list to hold IDs of folds.")
-
-(defvar-local syncthing--state-collapse-after-start
-  nil
-  "Tmp to hold collapse toggle.")
-
-(defvar-local syncthing--state-count-local-files
-  0
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-count-local-folders
-  0
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-count-local-bytes
-  0
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-version
-  ""
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-my-id
-  ""
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-uptime
-  0
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-auto-refresh
-  nil
-  "Tmp to hold local state.")
-
-(defvar-local syncthing--state-auto-refresh-timer
-  nil
-  "Tmp to hold local state.")
-
-;; keyboard
-(defvar-local syncthing-mode-map
-  (let ((map (make-keymap)))
-    ;; (set-keymap-parent map special-mode-map)
-    (define-key map (kbd "RET") #'syncthing--newline)
-    (define-key map (kbd "?") #'describe-bindings)
-    map))
-
-;; private/helper funcs
-(defun syncthing--request (method url &rest data)
-  "Send authenticated HTTP request to Syncthing REST API.
-Argument METHOD HTTP method/verb.
-Argument URL API to call.
-Optional argument DATA Data to send."
-  (unless syncthing-token
-    (setq syncthing-token (read-string "Synchting REST API token: ")))
-
+;;@TODO: make async
+(defun syncthing--request (method url token &rest data)
+  "Return METHOD response from URL with TOKEN and DATA."
   (let ((url-request-method method)
         (url-request-data data)
-        (url-request-extra-headers
-         `(("X-Api-Key" . ,syncthing-token))))
-    (ignore url-request-method method
-            url-request-data data
-            url-request-extra-headers)
-    (with-temp-buffer
-      (url-insert-file-contents url)
-      (json-parse-buffer :object-type 'alist))))
+        (url-request-extra-headers `(("X-Api-Key" . ,token))))
+    ;;@TODO: handle error responses
+    (with-temp-buffer (url-insert-file-contents url)
+                      (json-parse-buffer :object-type 'alist
+                                         :array-type 'list
+                                         :null-object nil
+                                         :false-object nil))))
 
-(defun syncthing--get-widget (pos)
-  "Try to find an Emacs Widget at POS."
-  (let ((button (get-char-property pos 'button)))
-    (or button
-        (setq button (get-char-property (line-beginning-position) 'button)))
-    button))
+(defun syncthing-request (server method endpoint &rest data)
+  "Return SERVER response for METHOD at ENDPOINT for request with DATA."
+  (apply #'syncthing--request
+         (append (list method
+                       (format "%s/%s" (syncthing-server-url server) endpoint)
+                       (syncthing-server-token server))
+                 data)))
 
-(defun syncthing--newline (pos &optional event)
-  "RET/Enter/newline-keypress handler.
-Argument POS Incoming EVENT position."
-  (interactive "@d")
-  (let ((button (syncthing--get-widget pos)))
-    (if button
-	    (widget-apply-action button event)
-      (error "You can't edit this part of the Syncthing buffer"))))
+(defun syncthing--server-update (server)
+  "Update SERVER data."
+  (cl-loop with data = (syncthing-request server "GET" "rest/config")
+           initially do
+           (setf (alist-get 'system-version data)
+                 (syncthing-request server "GET" "rest/system/version")
+                 (alist-get 'system-status data)
+                 (syncthing-request server "GET" "rest/system/status"))
+           with folders = (alist-get 'folders data)
+           for i below (length folders)
+           for folder = (nth i folders)
+           for id = (alist-get 'id folder)
+           do (setf (alist-get 'completion folder)
+                    (syncthing-request server "GET"
+                                       (concat "rest/db/completion?folder=" id))
+                    (alist-get 'status folder)
+                    (syncthing-request server "GET"
+                                       (concat "rest/db/status?folder=" id))
+                    (nth i folders) folder)
+           (cl-loop with devices = (alist-get 'devices data)
+                    for i below (length devices)
+                    for device = (nth i devices)
+                    for device-id = (alist-get 'deviceID device)
+                    for endpoint = (format "rest/db/completion?device=%s&folder=" device-id)
+                    do (setf (alist-get id (alist-get 'progress device) nil nil #'equal)
+                             (syncthing-request server "GET" (concat endpoint id))
+                             (nth i devices) device))
+           finally return (setf (syncthing-server-data server) data)))
 
-(defun syncthing--url (path)
-  "Assemble full API url from PATH."
-  (format "%s/%s" syncthing-base-url path))
+(defun syncthing-server (name url token)
+  "Return server with NAME URL and TOKEN."
+  (let ((server (syncthing--server :name name :url url :token token)))
+    (syncthing--server-update server)
+    server))
 
-(defun syncthing--title (text)
-  "Format TEXT as title."
-  (propertize text 'face 'syncthing-title))
+(defconst syncthing-gigibyte (expt 1024 3))
+(defun syncthing--header-line (server)
+  "Return SERVER `header-line-format' string."
+  ;;@TODO: Make configurable, Add help text to icons, semantic faces.
+  (let ((data (syncthing-server-data server)))
+    (string-join
+     (list
+      ;;@FIX: Hardcoded?
+      " 0B/s" " 0B/s"
+      (format " %d"
+              (cl-reduce #'+ (alist-get 'folders data)
+                         :key (lambda (folder)
+                                (alist-get 'localFiles (alist-get 'status folder) 0))))
+      (format " %d"
+              (cl-reduce #'+ (alist-get 'folders data)
+                         :key (lambda (folder)
+                                (alist-get 'localDirectories (alist-get 'status folder) 0))))
+      (format " ~%.1fGiB"
+              (/ (cl-reduce #'+ (alist-get 'folders data)
+                            :key (lambda (folder)
+                                   (alist-get 'localBytes (alist-get 'status folder) 0)))
+                 syncthing-gigibyte))
+      ;;@FIX: Hardcoded?
+      " 3/3" " 4/5"
+      "" (substring (alist-get 'myID (alist-get 'system-status data) "n/a") 0 6)
+      "" (alist-get 'version (alist-get 'system-version data) "n/a"))
+     " ")))
 
-(defun syncthing--prop (text)
-  "Format TEXT as property."
-  (propertize text 'face 'syncthing-prop))
+(defun syncthing--draw (server)
+  "Draw client view of SERVER."
+  (let ((inhibit-read-only t)) (erase-buffer))
+  (widget-setup)
+  (setq header-line-format (syncthing--header-line server)))
 
-(defun syncthing--bold (text)
-  "Format TEXT as bold."
-  (propertize text 'face 'syncthing-bold))
+(defun syncthing-revert-buffer (&rest _)
+  "Update server and redraw view."
+  (unless syncthing-server (user-error "No Syncthing server associated with buffer"))
+  (syncthing--server-update syncthing-server)
+  (syncthing--draw syncthing-server))
 
-(defun syncthing--italic (text)
-  "Format TEXT as italic."
-  (propertize text 'face 'syncthing-italic))
-
-(defun syncthing--rate-download (text)
-  "Format TEXT as download rate."
-  (propertize text 'face 'syncthing-rate-download))
-
-(defun syncthing--rate-upload (text)
-  "Format TEXT as upload rate."
-  (propertize text 'face 'syncthing-progress-75))
-
-(defun syncthing--count-local-files (text)
-  "Format TEXT as local files count."
-  (propertize text 'face 'syncthing-count-local-files))
-
-(defun syncthing--count-local-folders (text)
-  "Format TEXT as local folders count."
-  (propertize text 'face 'syncthing-count-local-folders))
-
-(defun syncthing--count-local-bytes (text)
-  "Format TEXT as local bytes count."
-  (propertize text 'face 'syncthing-count-local-bytes))
-
-(defun syncthing--count-listeners (text)
-  "Format TEXT as listeners count."
-  (propertize text 'face 'syncthing-count-listeners))
-
-(defun syncthing--count-discovery (text)
-  "Format TEXT as discovery count."
-  (propertize text 'face 'syncthing-count-discovery))
-
-(defun syncthing--uptime (text)
-  "Format TEXT as uptime."
-  (propertize text 'face 'syncthing-uptime))
-
-(defun syncthing--my-id (text)
-  "Format TEXT as Syncthing ID."
-  (propertize text 'face 'syncthing-my-id))
-
-(defun syncthing--list ()
-  "List all resources."
-  (let-alist (syncthing--request
-              "GET" (syncthing--url "rest/config"))
-    (cond ((eq .version 37)
-           (save-window-excursion
-             (switch-to-buffer (get-buffer-create syncthing--state-session-buffer))
-             (widget-insert (syncthing--title " Folders\n")))
-           (mapc
-            #'syncthing--list-37-folder
-            (sort .folders
-                  (lambda (left right)
-                    (let ((lname "")
-                          (rname ""))
-                      (dolist (litem left)
-                        (when (string-equal "label" (car litem))
-                          (setq lname (cdr litem))))
-                      (dolist (ritem right)
-                        (when (string-equal "label" (car ritem))
-                          (setq rname (cdr ritem))))
-                      (string< lname rname)))))
-           (save-window-excursion
-             (switch-to-buffer (get-buffer-create syncthing--state-session-buffer))
-             (widget-insert (syncthing--title "\n"))
-             (widget-insert (syncthing--title " Devices\n")))
-           (mapc
-            #'syncthing--list-37-device
-            (sort .devices
-                  (lambda (left right)
-                    (let ((lname "")
-                          (rname ""))
-                      (dolist (litem left)
-                        (when (string-equal "name" (car litem))
-                          (setq lname (cdr litem))))
-                      (dolist (ritem right)
-                        (when (string-equal "name" (car ritem))
-                          (setq rname (cdr ritem))))
-                      (string< lname rname)))))))))
-
-(defun syncthing--progress (device-id folder-id)
-  "Get progress for DEVICE-ID and FOLDER-ID."
-  (let-alist (syncthing--request
-              "GET" (syncthing--url
-                     (format "rest/db/completion?device=%s&folder=%s"
-                             device-id folder-id)))
-    .completion))
-
-(defun syncthing--list-37-folder (folder)
-  "Render single FOLDER item in a widget."
-  (let ((name "")
-        (id "")
-        (type "")
-        (path "")
-        (devices nil)
-        (perc 0))
-    (dolist (item folder)
-      (cond ((string-equal "label" (car item))
-             (setq name (cdr item)))
-            ((string-equal "id" (car item))
-             (setq id (cdr item))
-             (when syncthing--state-collapse-after-start
-               (push id syncthing--state-fold-folders)))
-            ((string-equal "type" (car item))
-             (setq type (cdr item)))
-            ((string-equal "path" (car item))
-             (setq path (cdr item)))
-            ((string-equal "devices" (car item))
-             (setq devices (cdr item)))))
-    (let-alist (syncthing--request
-                "GET" (syncthing--url
-                       (format "rest/db/status?folder=%s" id)))
-      (setq syncthing--state-count-local-files
-            (+ syncthing--state-count-local-files .localFiles))
-      (setq syncthing--state-count-local-bytes
-            (+ syncthing--state-count-local-bytes .localBytes))
-      (setq syncthing--state-count-local-folders
-            (+ syncthing--state-count-local-folders .localDirectories)))
-    (dolist (item (syncthing--request
-                   "GET" (syncthing--url
-                          (format "rest/db/completion?folder=%s" id))))
-      (cond ((string-equal "completion" (car item))
-             (setq perc (cdr item)))))
-    (save-window-excursion
-      (switch-to-buffer (get-buffer-create syncthing--state-session-buffer))
-      (widget-create
-       'push-button
-       :button-face "menu"
-       :button-suffix
-       (concat
-        " "
-        (syncthing--color-perc perc)
-        (syncthing--bold (format " %s\n" name))
-        (unless (member id syncthing--state-fold-folders)
-          (syncthing--prop (format "\t%s\n\t%s\n\t%s\n\t%s\n"
-                                   id type path devices))))
-       :action
-       (lambda (&rest _event)
-         (if (member id syncthing--state-fold-folders)
-             (progn
-               (setq syncthing--state-fold-folders
-                     (delete id syncthing--state-fold-folders))
-               (save-excursion
-                 (widget-delete (syncthing--get-widget (point)))
-                 (syncthing--list-37-folder folder)))
-           (progn
-             (if syncthing--state-fold-folders
-                 (push id syncthing--state-fold-folders)
-               (setq syncthing--state-fold-folders (list id)))
-             (save-excursion
-               (widget-delete (syncthing--get-widget (point)))
-               (syncthing--list-37-folder folder)))))
-       (if (member id syncthing--state-fold-folders)
-           (syncthing--bold ">")
-         (syncthing--bold "v"))))))
-
-(defun syncthing--color-perc (perc)
-  "Colorize PERC float."
-  (propertize
-   (format syncthing-format-perc perc)
-   'face
-   (cond ((< perc 25)
-          'syncthing-progress-0)
-         ((and (>= perc 25) (< perc 50))
-          'syncthing-progress-25)
-         ((and (>= perc 50) (< perc 75))
-          'syncthing-progress-50)
-         ((and (>= perc 75) (< perc 100))
-          'syncthing-progress-75)
-         ((>= perc 100)
-          'syncthing-progress-100))))
-
-(defun syncthing--list-37-device (device)
-  "Render single DEVICE item in a widget."
-  (let ((name "")
-        (id "")
-        (paused t)
-        (addresses '())
-        (perc 0))
-    (dolist (item device)
-      (cond ((string-equal "name" (car item))
-             (setq name (format "%s" (cdr item))))
-            ((string-equal "deviceID" (car item))
-             (setq id (format "%s" (cdr item)))
-             (when syncthing--state-collapse-after-start
-               (push id syncthing--state-fold-devices)))
-            ((string-equal "paused" (car item))
-             (setq paused (if (eq (cdr item) :false) "active" "paused")))
-            ((string-equal "addresses" (car item))
-             (setq addresses (format "%s" (cdr item))))))
-    (dolist (item (syncthing--request
-                   "GET" (syncthing--url
-                          (format "rest/db/completion?device=%s" id))))
-      (cond ((string-equal "completion" (car item))
-             (setq perc (cdr item)))))
-    (save-window-excursion
-      (switch-to-buffer (get-buffer-create syncthing--state-session-buffer))
-      (widget-create
-       'push-button
-       :button-face "menu"
-       :button-suffix
-       (concat
-        " "
-        (syncthing--color-perc perc)
-        (syncthing--bold (format " %s\n" name))
-        (unless (member id syncthing--state-fold-devices)
-          (syncthing--prop (format "\t%s\n\t%s\n\t%s\n"
-                                   id paused addresses))))
-       :action
-       (lambda (&rest _event)
-         (if (member id syncthing--state-fold-devices)
-             (progn
-               (setq syncthing--state-fold-devices
-                     (delete id syncthing--state-fold-devices))
-               (save-excursion
-                 (widget-delete (syncthing--get-widget (point)))
-                 (syncthing--list-37-device device)))
-           (progn
-             (if syncthing--state-fold-devices
-                 (push id syncthing--state-fold-devices)
-               (setq syncthing--state-fold-devices (list id)))
-             (save-excursion
-               (widget-delete (syncthing--get-widget (point)))
-               (syncthing--list-37-device device)))))
-       (if (member id syncthing--state-fold-devices)
-           (syncthing--bold ">")
-         (syncthing--bold "v"))))))
-
-(defun syncthing--draw ()
-  "Setup buffer and draw widgets."
-  (syncthing--list)
-  (save-window-excursion
-    (switch-to-buffer (get-buffer-create syncthing--state-session-buffer))
-    (widget-setup)
-    (let-alist (syncthing--request
-                "GET" (syncthing--url "rest/system/version"))
-      (setq syncthing--state-version .version))
-    (let-alist (syncthing--request
-                "GET" (syncthing--url "rest/system/status"))
-      (setq syncthing--state-my-id
-            (substring .myID 0 6))
-      (setq syncthing--state-uptime .uptime))
-    (setq header-line-format
-          (concat
-           " "
-           (syncthing--rate-download " 0B/s")
-           " "
-           (syncthing--rate-upload " 0B/s")
-           " "
-           (syncthing--count-local-files
-            (format " %d" syncthing--state-count-local-files))
-           " "
-           (syncthing--count-local-folders
-            (format " %d" syncthing--state-count-local-folders))
-           " "
-           (syncthing--count-local-bytes
-            (format " ~%.1fGiB"
-                    (/ syncthing--state-count-local-bytes
-                       (* 1024.0 1024.0 1024.0))))
-           " "
-           (syncthing--count-listeners " 3/3")
-           " "
-           (syncthing--count-discovery " 4/5")
-           " "
-           (syncthing--uptime
-            (format " %dd %dh %dm"
-                    0
-                    (/ syncthing--state-uptime 3600)
-                    (* 60 (- (/ syncthing--state-uptime 3600.0)
-                             (/ syncthing--state-uptime 3600)))))
-           " "  ;; bad glyph! :(
-           (syncthing--my-id (format " %s" syncthing--state-my-id))
-           " "
-           (format " %s" syncthing--state-version)))
-    ;; messes up with cursor position, reset to 0,0
-    (goto-char 0)))
-
-(defun syncthing--init-state ()
-  "Reset all variables holding initial state.
-Optional argument SKIP-CANCEL Skip removing auto-refresh."
-  ;; everything += or appendable has to reset in each update
-  (setq syncthing--state-fold-folders (list))
-  (setq syncthing--state-fold-devices (list))
-  (setq syncthing--state-collapse-after-start
-        syncthing-start-collapsed)
-  (setq syncthing--state-count-local-files 0)
-  (setq syncthing--state-count-local-folders 0)
-  (setq syncthing--state-count-local-bytes 0)
-  (setq syncthing--state-version "")
-  (setq syncthing--state-uptime 0))
-
-(defun syncthing--cleanup (&rest _ignore)
-  "Stop auto-refresh and clean resources, if any."
-  ;; known timer
-  (when syncthing--state-auto-refresh-timer
-    (cancel-timer syncthing--state-auto-refresh-timer)
-    (setq syncthing--state-auto-refresh-timer nil))
-
-  ;; possible leak due to some strange behavior/bug
-  (dolist (timer timer-list)
-    (let ((text (format "%s" timer)))
-      (when (and (string-match "syncthing-timer" text)
-                 (string-match "killed buffer" text))
-        (message "Syncthing cleanup: Canceling dangling timer '%s'" timer)
-        (cancel-timer timer)))))
-
-(defun syncthing--update ()
-  "Update function for every refresh iteration."
-  (let ((inhibit-read-only t))
-    (erase-buffer))
-
-  (syncthing--init-state)
-  (syncthing--draw)
-  (setq syncthing--state-collapse-after-start nil)
-  (switch-to-buffer (get-buffer-create syncthing--state-session-buffer)))
-
-(defun syncthing--buffer-with-timer (name)
-  "Find out whether there's a timer associated with a buffer NAME."
-  ;; Necessary with major mode killing local variables of which one holds the
-  ;; timer reference. Global var would prevent multiple sessions or would be
-  ;; overall annoying.
-  (let ((any nil))
-    (dolist (timer timer-list)
-      (let ((text (format "%s" timer)))
-        (when (and (string-match "syncthing-timer" text)
-                   (string-match (regexp-quote name) text))
-          (setq any t))))
-    any))
+(defvar syncthing-mode-map
+  (let ((map (make-keymap))) map))
 
 ;; modes for client's session buffer(s)
-(define-derived-mode syncthing-mode
-  special-mode
-  "Syncthing"
-  "Launch Syncthing client in the current window."
-  :group 'syncthing
-  (add-hook 'kill-buffer-hook
-            #'syncthing--cleanup
-            syncthing-cleanup-priority t)
-  (syncthing--cleanup)
+(define-derived-mode syncthing-mode special-mode "Syncthing"
+  "Major mode for Syncthing client.
 
-  ;; current buffer, new one is created via `(syncthing)'
-  ;;
-  ;; make sure it's initialized only once, otherwise (current-buffer) fetches
-  ;; value from any other window currently in focus causing a bit of a mess
-  (when (string-equal "" syncthing--state-session-buffer)
-    (setq syncthing--state-session-buffer (current-buffer)))
+\\{syncthing-mode-map}"
+  (setq-local revert-buffer-function #'syncthing-revert-buffer))
 
-  ;; custom handler for RET / widget input handler
-  ;; (keymap-local-set "RET" #'syncthing--newline)
-  ;; (keymap-local-set "?" #'describe-bindings)
-  (use-local-map syncthing-mode-map)
+(defun syncthing ()
+  "@TODO."
+  (interactive)
+  (let* ((server (car (or syncthing--servers
+                          (push (syncthing-server "Default Localhost"
+                                                  "https://127.0.0.1:8384"
+                                                  "nAe22LqECtwoDvToDb2hfd2tMMFotf5D")
+                                syncthing--servers)))))
+    (with-current-buffer (get-buffer-create
+                          (format "*syncthing: %s*" (syncthing-server-name server)))
+      (unless (derived-mode-p 'syncthing-mode) (syncthing-mode))
+      (setq-local syncthing-server server)
+      (put 'syncthing-server 'permanent-local t) ;;persist mode change
+      (syncthing--draw server)
+      (pop-to-buffer (current-buffer)
+                     '((display-buffer-reuse-window display-buffer-same-window))))))
 
-  (syncthing--update)
-  ;; schedule only when configured and only once
-  (when (and syncthing-start-with-auto-refresh
-             (not syncthing--state-auto-refresh-timer)
-             (not (syncthing--buffer-with-timer
-                   (buffer-name syncthing--state-session-buffer))))
-    (syncthing-auto-refresh-mode 1)))
-
-(define-minor-mode syncthing-auto-refresh-mode
-  "Enable auto-refreshing state for `syncthing-mode'."
-  :lighter " Auto-refresh"
-  (if (not syncthing-auto-refresh-mode)
-      (when syncthing--state-auto-refresh-timer
-        (cancel-timer syncthing--state-auto-refresh-timer)
-        (setq syncthing--state-auto-refresh-timer nil))
-    (setq syncthing--state-auto-refresh-timer
-          (run-at-time
-           t syncthing-auto-refresh-interval-sec
-           ;; name is for filtering in timers to prevent duplicate scheduling,
-           ;; object is to detectt a dangling buffer (killed) in (list-timers)
-           (let ((baked-value "syncthing-timer")
-                 (buf-name (buffer-name syncthing--state-session-buffer))
-                 (buf-obj syncthing--state-session-buffer))
-             (ignore buf-name baked-value)  ;; do not remove
-             (lambda (&rest _ignore)
-               (save-window-excursion
-                 (if (not (buffer-name buf-obj))
-                     ;; killed buffer,  cancel timer
-                     (when syncthing--state-auto-refresh-timer
-                       (cancel-timer syncthing--state-auto-refresh-timer)
-                       (setq syncthing--state-auto-refresh-timer nil))
-                   (switch-to-buffer (get-buffer-create buf-obj))
-                   (syncthing--update)))))))))
-
-(defun syncthing (&optional url)
-  "Launch Syncthing client for server at URL.
-URL defaults to `syncthing-base-url'."
-  (interactive (list (if (or current-prefix-arg (not syncthing-base-url))
-                         (read-string "Syncthing Server URL: ")
-                       syncthing-base-url)))
-  (unless syncthing-base-url (user-error "Cannot connect without server URL"))
-  (with-current-buffer (get-buffer-create (format "*syncthing(%s)*" syncthing-base-url))
-    (unless (derived-mode-p 'syncthing-mode) (syncthing-mode))
-    (pop-to-buffer (current-buffer)
-                   '((display-buffer-reuse-window display-buffer-same-window)))))
+(define-minor-mode syncthing-auto-revert-mode
+  "Refresh client view every `syncthing-auto-revert-interval' seconds."
+  :lighter " syncthing-auto-revert"
+  (unless (derived-mode-p 'syncthing-mode) (user-error "Buffer not in syncthing-mode"))
+  (setq-local buffer-stale-function (when syncthing-auto-revert-mode #'always)
+              auto-revert-interval
+              (when syncthing-auto-revert-mode syncthing-auto-revert-interval))
+  (auto-revert-mode (if syncthing-auto-revert-mode 1 -1)))
 
 (provide 'syncthing)
 ;;; syncthing.el ends here
